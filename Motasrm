@@ -1,0 +1,201 @@
+<?php
+// ✎ₛₒₙ \\
+$token = '7780673463:AAFMlXXmgF35e5RByqS_W6VLfzuLNvi2oAg';
+// ⊀᥉͡ò͜𝙽 </> ˢᵃʸᵒⁿᵃʳᵃ \\
+function botRequest($method, $parameters = []) {
+    global $token;
+    $url = "https://api.telegram.org/bot" . $token . "/" . $method;
+    $ch = curl_init();
+    curl_setopt($ch, CURLOPT_URL, $url);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, $parameters);
+    $response = curl_exec($ch);
+    curl_close($ch);
+    return json_decode($response, true);
+}
+
+function createJsonFileIfNotExists($jsonFile) {
+    if (!file_exists($jsonFile)) {
+        $data = [];
+        file_put_contents($jsonFile, json_encode($data, JSON_PRETTY_PRINT));
+    }
+}
+
+function saveUserRating($ratedUserId, $rating, $raterUserId, $username, $jsonFile) {
+    $data = json_decode(file_get_contents($jsonFile), true);
+    
+    if (!isset($data[$ratedUserId])) {
+        $data[$ratedUserId] = [
+            "username" => $username,
+            "user_id" => $ratedUserId,
+            "total_rating" => 0,
+            "rating_count" => 0,
+            "ratings" => []  
+        ];
+    }
+
+    if (!in_array($raterUserId, $data[$ratedUserId]["ratings"])) {
+   
+        $data[$ratedUserId]["total_rating"] += $rating;
+        $data[$ratedUserId]["rating_count"] += 1;
+        $data[$ratedUserId]["ratings"][] = $raterUserId;  
+    } else {
+        return false; 
+    }
+
+    file_put_contents($jsonFile, json_encode($data, JSON_PRETTY_PRINT));
+    return true; 
+}
+
+function hasRated($ratedUserId, $raterUserId, $jsonFile) {
+    $data = json_decode(file_get_contents($jsonFile), true);
+    return isset($data[$ratedUserId]) && in_array($raterUserId, $data[$ratedUserId]["ratings"]);
+}
+
+function getUserBio($user_id) {
+    $url = "https://api.telegram.org/bot" . $GLOBALS['token'] . "/getChat?chat_id=$user_id";
+    $response = json_decode(file_get_contents($url), true);
+    if (isset($response['result']['bio'])) {
+        return $response['result']['bio'];
+    }
+    return 'غير متوفر'; 
+}
+
+function getProfilePhoto($user_id) {
+    $user_profile = botRequest("getUserProfilePhotos", ["user_id" => $user_id]);
+    if (!empty($user_profile['result']['photos'])) {
+        return $user_profile['result']['photos'][0][0]['file_id'];
+    }
+    return null;
+}
+
+function sendUserInfo($chat_id, $message) {
+   
+    $user_id = $message['from']['id'];
+    $username = isset($message['from']['username']) ? $message['from']['username'] : 'غير متوفر';
+    $first_name = isset($message['from']['first_name']) ? $message['from']['first_name'] : 'غير متوفر';
+    $bio = getUserBio($user_id);
+    $profile_pic_url = getProfilePhoto($user_id);
+
+    $data = json_decode(file_get_contents($GLOBALS['jsonFile']), true);
+    $userRatings = $data[$user_id] ?? null;
+
+    $totalStars = $userRatings ? $userRatings['total_rating'] : 0;
+    $ratingCount = $userRatings ? $userRatings['rating_count'] : 0;
+
+    $text = "╭┈┈┈┈┈┈┈┈┈┈\n" .
+            "├ • υѕear : ❲ $first_name ❳\n" .
+            "├ • υѕernaмe : ❲ @Motadem ❳\n" .
+            "├ • !Đ : ❲ $user_id ❳\n" .
+            "├ • вιω ⚘ : ❲ $bio ❳\n" .
+            "├ • sтαяs : ❲ $totalStars ❳ ➠ ❲ $ratingCount ❳\n" .
+            "╰┈┈┈┈┈";
+
+    if ($profile_pic_url) {
+        botRequest("sendPhoto", [
+            'chat_id' => $chat_id,
+            'photo' => $profile_pic_url,
+            'caption' => $text,
+            'reply_markup' => json_encode([
+                'inline_keyboard' => [
+                    [['text' => '⭐', 'callback_data' => "rate_{$user_id}_1"]]
+                ]
+            ])
+        ]);
+    } else {
+        botRequest("sendMessage", [
+            'chat_id' => $chat_id,
+            'text' => $text,
+            'reply_markup' => json_encode([
+                'inline_keyboard' => [
+                    [['text' => '⭐', 'callback_data' => "rate_{$user_id}_1"]]
+                ]
+            ])
+        ]);
+    }
+}
+
+function processMessage($message) {
+    global $jsonFile;
+    
+    $chat_id = $message["chat"]["id"];
+    $text = $message["text"];
+    $user_id = $message["from"]["id"];
+    $is_group = isset($message["chat"]["type"]) && $message["chat"]["type"] === "supergroup";
+
+    if ($text === "/start" && !$is_group) {
+        $welcome_message = "أهلاً بك،! مرحبًا بك في البوت الخاص بنا.";
+        botRequest("sendMessage", ["chat_id" => $chat_id, "text" => $welcome_message]);
+    }
+
+    elseif ($text === "ايدي" && $is_group) {
+        sendUserInfo($chat_id, $message);
+    }
+}
+
+function processCallbackQuery($callbackQuery) {
+    global $jsonFile;
+
+    $callbackData = $callbackQuery['data'];
+    $callbackQueryId = $callbackQuery['id'];
+    $raterUserId = $callbackQuery['from']['id'];
+
+    if (preg_match('/^rate_(\d+)_(\d+)$/', $callbackData, $matches)) {
+        $ratedUserId = $matches[1];
+        $rating = (int)$matches[2]; 
+
+        $username = isset($callbackQuery['from']['username']) ? $callbackQuery['from']['username'] : 'غير متوفر';
+
+        if (hasRated($ratedUserId, $raterUserId, $jsonFile)) {
+            botRequest("answerCallbackQuery", [
+                'callback_query_id' => $callbackQueryId,
+                'text' => "لا يمكنك تقييم هذا المستخدم مرة أخرى!",
+                'show_alert' => true
+            ]);
+        } else {
+            if (saveUserRating($ratedUserId, $rating, $raterUserId, $username, $jsonFile)) {
+                $stars = str_repeat('⭐', $rating);
+                botRequest("answerCallbackQuery", [
+                    'callback_query_id' => $callbackQueryId,
+                    'text' => "تم تقييم المستخدم بـ $stars",
+                    'show_alert' => true
+                ]);
+            } else {
+                botRequest("answerCallbackQuery", [
+                    'callback_query_id' => $callbackQueryId,
+                    'text' => "خطأ في حفظ التقييم!",
+                    'show_alert' => true
+                ]);
+            }
+        }
+    } else {
+        botRequest("answerCallbackQuery", [
+            'callback_query_id' => $callbackQueryId,
+            'text' => "خطأ في التقييم!",
+            'show_alert' => true
+        ]);
+    }
+}
+
+$jsonFile = 'ratings.json'; 
+createJsonFileIfNotExists($jsonFile); 
+$offset = 0; 
+
+while (true) {
+   
+    $updates = botRequest("getUpdates", ["offset" => $offset, "timeout" => 10]);
+
+    if ($updates["ok"]) {
+        foreach ($updates["result"] as $update) {
+            $offset = $update["update_id"] + 1; 
+            
+            if (isset($update["message"])) {
+                processMessage($update["message"]);
+            } elseif (isset($update["callback_query"])) {
+                processCallbackQuery($update["callback_query"]);
+            }
+        }
+    }
+
+    sleep(1);
+}
